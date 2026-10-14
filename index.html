@@ -49,7 +49,7 @@
 <div class="foot"><button class="btn ghost" id="reset">清空这一天的记录</button></div>
 
 <script src="config.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.js"></script>
 <script>
 const MENU=[
  {id:"xmn",name:"雪媚娘",e:"🍡",c:"#ffd3dc",p:6},
@@ -400,9 +400,12 @@ function showLogin(){return new Promise(res=>{
  document.body.appendChild(o);
  const go=async()=>{const em=$("lem").value.trim(),pw=$("lpw").value;if(!em||!pw){$("lerr").textContent="请输入邮箱和密码";return}
   $("lgo").disabled=true;$("lerr").textContent="";
-  const {data,error}=await SB.auth.signInWithPassword({email:em,password:pw});$("lgo").disabled=false;
-  if(error||!data.session){$("lerr").textContent="邮箱或密码不对哦";return}
-  o.remove();res(data.session)};
+  let r;try{r=await SB.auth.signInWithPassword({email:em,password:pw})}catch(ex){r={error:{message:String(ex&&ex.message||ex)}}}
+  $("lgo").disabled=false;
+  const er=r.error,ss=r.data&&r.data.session;
+  if(er||!ss){const m=String(er&&er.message||"未知错误");
+   $("lerr").textContent=/invalid login/i.test(m)?"邮箱或密码不对哦（请用 Supabase 里建的那个账号）":/not confirmed/i.test(m)?"这个账号还没确认：请到 Supabase 的 Users 里删掉重建，并勾选 Auto Confirm":/api key|apikey/i.test(m)?"密钥填错了：请检查 config.js 里的 SB_KEY":/fetch|network|failed/i.test(m)?"连不上 Supabase：请检查 config.js 里的 SB_URL 和网络":"登录失败："+m;return}
+  o.remove();res(ss)};
  $("lgo").onclick=go;$("lpw").onkeydown=e=>{if(e.key==="Enter")go()};
 })}
 async function supaLogin(){
