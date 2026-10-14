@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>sweet_bites02 · 甜点小账本</title>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="syncb" id="sync"></div><button class="snd" id="snd"></button>
+<h1><span class="logo" id="logo"></span> sweet_bites02</h1>
+<div class="daynav"><button id="prevD">‹</button><div id="date"></div><button id="nextD">›</button><button id="toToday" class="pill">回今天</button></div>
+<div class="stats">
+  <div class="stat"><b id="sTotal">RM0</b><span>当天已入账</span></div>
+  <div class="stat"><b id="sPend">0</b><span>待撕小票</span></div>
+  <div class="stat"><b id="sCnt">0</b><span>卖出份数</span></div>
+</div>
+
+<h2>① 点一点，帮顾客点单</h2>
+<div class="menu" id="menu"></div>
+<div class="flav" id="flav"></div>
+
+<h2>② 出小票</h2>
+<div class="printer">
+  <div class="src" id="srcRow"></div>
+  <div class="top"><span class="led"></span><input id="note" placeholder="顾客 / 备注（可不填）" maxlength="16"></div>
+  <div class="slot"></div>
+  <div class="paperwrap"><div id="draft"></div></div>
+</div>
+<div class="actions">
+  <button class="btn ghost" id="clear">清空</button>
+  <button class="btn" id="print">🎀 出票</button>
+</div>
+
+<h2>③ 排单黑板</h2>
+<div class="board"><div class="chalk">✿ 排单黑板 ✿<small>sweet_bites02</small></div><div class="hint">左右滑动翻看 · 把小票往下拉，或点「撕下」入账（没撕的会一直留着）</div><div class="fl" id="filt"></div><div class="rail" id="rail"></div></div>
+
+<h2>④ 当天分类账</h2>
+<div id="ledger"></div>
+<h2>⑤ 代理汇总</h2><div class="agents" id="agents"></div>
+<h2>⑥ 💰 总营业额</h2><div class="rev" id="rev"></div>
+<h2>⑦ 每日账本</h2><div class="days" id="days"></div>
+
+<details>
+  <summary>⚙️ 价格 / 代理名称</summary>
+  <div id="prices"></div><div id="agentset"></div><div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;align-items:flex-start"><button class="btn ghost" id="expj">💾 导出备份（JSON · 可搬家）</button><button class="btn ghost" id="impj">📂 导入备份</button><button class="btn ghost" id="exp">⬇️ 导出账本（CSV · 给 Excel 看）</button></div><input type="file" id="impf" accept=".json,application/json" hidden><button class="btn ghost" id="outbtn" style="display:none;margin-top:8px">🚪 退出登录</button>
+</details>
+<div class="foot"><button class="btn ghost" id="reset">清空这一天的记录</button></div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+<script>
+const MENU=[
+ {id:"xmn",name:"雪媚娘",e:"🍡",c:"#ffd3dc",p:6},
+ {id:"dhh",name:"冰豆花",e:"🍧",c:"#d2f0e2",p:5},
+ {id:"ck",name:"纽约软曲奇",e:"🍪",c:"#ffe7a8",p:8}
+];
+const KEY="sweet_bites02_v1";
+let S={prices:{},orders:[],seq:1};
+try{const r=localStorage.getItem(KEY);if(r)S=Object.assign(S,JSON.parse(r))}catch(e){}
+MENU.forEach(m=>{if(S.prices[m.id]==null)S.prices[m.id]=m.p});
+const FLAV=[{id:"mango",n:"Mango",z:"芒果",c:"#ffe08a"},{id:"grape",n:"Grape",z:"葡萄",c:"#d9c7f2"},{id:"oreo",n:"Oreo",z:"奥利奥",c:"#ddd3cc"},{id:"longan",n:"Longan",z:"龙眼",c:"#f3dcc0"}];
+const ITEMS=[...FLAV.map(f=>({id:"xmn_"+f.id,cat:"xmn",name:"雪媚娘·"+f.n,fl:f})),{id:"xmn",cat:"xmn",name:"雪媚娘",legacy:true},{id:"dhh",cat:"dhh",name:"冰豆花"},{id:"ck",cat:"ck",name:"纽约软曲奇"}];
+if(S.prices.xmnbox==null)S.prices.xmnbox=24;
+const catItems=c=>ITEMS.filter(i=>i.cat===c);
+const catQty=(o,c)=>catItems(c).reduce((a,i)=>a+(o.items[i.id]||0),0);
+const itemsOf=o=>ITEMS.filter(i=>o.items[i.id]);
+if(!Array.isArray(S.agents)||S.agents.length!==2)S.agents=["代理A","代理B"];if(S.sound==null)S.sound=true;
+S.orders.forEach((o,i)=>{if(!o.id)o.id="o"+i+"_"+o.time});
+const ords=()=>S.orders.filter(o=>!o.deleted);
+const saveLocal=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const save=()=>{saveLocal();flush()};
+const $=id=>document.getElementById(id);
+const today=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};let viewDate=today();
+const rm=n=>"RM"+(Math.round(n*100)/100).toFixed(2);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let draft={};
+const pad=n=>String(n).padStart(3,"0");
+const hm=t=>new Date(t).toTimeString().slice(0,5);
+
+function floatText(el,txt){
+  const r=el.getBoundingClientRect();
+  const f=document.createElement("div");f.className="float";f.textContent=txt;
+  f.style.left=(r.left+r.width/2-14)+"px";f.style.top=(r.top+4)+"px";
+  document.body.appendChild(f);setTimeout(()=>f.remove(),1100);
+}
+function draftTotal(){return ITEMS.filter(i=>i.cat!=="xmn").reduce((s,i)=>s+(draft[i.id]||0)*S.prices[i.cat],0)+draftBoxes.length*S.prices.xmnbox+sgTotal()*S.prices.xmn}
+function head(date,time,no,note,src){
+  return `<div class="shop">${ico(MENU[0],18)} sweet_bites02<small>HANDMADE DESSERTS</small></div><div class="dash"></div><div class="meta"><span>日期 ${date}</span><span>${time}</span></div><div class="meta"><span>单号 #${pad(no)}</span><span>${esc(srcName(src||"me"))}</span></div>${note?`<div class="meta"><span>备注 ${esc(note)}</span></div>`:""}<div class="dash"></div><div class="th"><span>品名</span><span style="text-align:center">份数</span><span>金额</span></div>`;
+}
+function foot(o,total){
+  const n=qty(o);
+  return `<div class="dash"></div><div class="sum"><span>共 ${n} 份</span><span>合计 ${rm(total)}</span></div><div class="thx">谢谢光临 ♡ 欢迎再来</div><div class="bar"></div>`;
+}
+const isBox=o=>Array.isArray(o.boxes);
+const isNewX=o=>isBox(o)||!!o.singles;
+const sgN=o=>o.singles?Object.values(o.singles).reduce((a,b)=>a+b,0):0;
+const flavSummary=b=>FLAV.map(f=>[f,b.filter(x=>x===f.id).length]).filter(x=>x[1]).map(x=>x[0].n+"×"+x[1]).join(" ");
+function xParts(rows){return{bx:rows.reduce((s,o)=>s+(isBox(o)?o.boxes.length:0),0),sg:rows.reduce((s,o)=>s+(isNewX(o)?sgN(o):catQty(o,"xmn")),0)}}
+const catAmt=(o,c)=>{if(c==="xmn"&&isNewX(o))return (isBox(o)?o.boxes.length:0)*(o.prices.xmnbox??S.prices.xmnbox)+sgN(o)*o.prices.xmn;return catQty(o,c)*o.prices[c]};
+const catLabel=(rows,m,cnt)=>{if(m.id!=="xmn")return `共 ${cnt} 份`;const p=xParts(rows);return `共 ${p.bx} 盒${p.sg?` + ${p.sg} 粒单卖`:""} · ${cnt} 粒`};
+function boxRow(b,k,price,extra){return `<div class="row"><span>雪媚娘 盒${k+1}</span><span class="qy">×1</span><span class="am">${rm(price)}${extra||""}</span></div><div class="sub">${flavSummary(b)}</div>`}
+function singleRow(f,n,price,extra){return `<div class="row"><span>雪媚娘·${f.n}</span><span class="qy">×${n}</span><span class="am">${rm(n*price)}${extra||""}</span></div>`}
+function ticketHTML(o){
+  const nx=isNewX(o);
+  const rows=itemsOf(o).filter(i=>!(nx&&i.cat==="xmn")).map(i=>`<div class="row"><span>${i.name}</span><span class="qy">×${o.items[i.id]}</span><span class="am">${rm(o.items[i.id]*o.prices[i.cat])}</span></div>`).join("");
+  const bx=isBox(o)?o.boxes.map((b,k)=>boxRow(b,k,o.prices.xmnbox??S.prices.xmnbox)).join(""):"";
+  const sg=o.singles?FLAV.filter(f=>o.singles[f.id]).map(f=>singleRow(f,o.singles[f.id],o.prices.xmn)).join(""):"";
+  return head(o.date,hm(o.time),o.no,o.note,o.src)+bx+sg+rows+foot(o,o.total);
+}
+let openFlav=false,draftBoxes=[],draftSingles={},curBox=[],boxLock=false,flavMode="box";
+const sgTotal=()=>Object.values(draftSingles).reduce((a,b)=>a+b,0);
+function resetDraft(){draft={};draftBoxes=[];draftSingles={};curBox=[];boxLock=false}
+const dq=c=>c==="xmn"?draftBoxes.length+sgTotal():(draft[c]||0);
+function syncXq(){const d=document.querySelector('.dish[data-id="xmn"] .q');if(d){const n=dq("xmn");d.textContent=n||"";d.className="q"+(n?" on":"")}}
+function renderMenu(){
+  $("menu").innerHTML=MENU.map(m=>`<button class="dish" data-id="${m.id}" style="--c:${m.c}"><span class="q ${dq(m.id)?"on":""}">${dq(m.id)||""}</span><span class="e">${ico(m)}</span><span class="n">${m.name}</span><span class="p">${m.id==="xmn"?rm(S.prices.xmn)+"/粒 · "+rm(S.prices.xmnbox)+"/盒":rm(S.prices[m.id])}</span></button>`).join("");
+  renderFlav();
+  document.querySelectorAll(".dish").forEach(b=>b.onclick=()=>{const id=b.dataset.id;
+    if(id==="xmn"){b.classList.remove("jelly");void b.offsetWidth;b.classList.add("jelly");openFlav=!openFlav;renderFlav();sfxTap(openFlav?3:1);return}
+    addItem(id,b)});
+}
+function renderFlav(drop){
+  const f=$("flav"),one=flavMode==="one";f.className="flav"+(openFlav?" open":"");
+  const slots=[0,1,2,3].map(i=>{const fl=FLAV.find(x=>x.id===curBox[i]);return fl?`<button class="slot2 on" data-i="${i}" style="--c:${fl.c}">${fl.z[0]}</button>`:`<span class="slot2"></span>`}).join("");
+  const top=`<div class="tabs"><button class="tab ${one?"":"on"}" data-m="box">🎁 一盒 4 粒 · ${rm(S.prices.xmnbox)}</button><button class="tab ${one?"on":""}" data-m="one">🍡 单粒 · ${rm(S.prices.xmn)}</button></div>`;
+  const mid=one?`<div class="bx"><div class="bxh"><b>点口味，每点一下加一粒</b><span>已加 ${sgTotal()} 粒 · 小票上可取消</span></div></div>`:`<div class="bx"><div class="bxh"><b>🎁 凑满 4 粒就封盒</b><span>已选 ${curBox.length}/4 · 点圆圈可取消</span></div><div class="slots">${slots}</div></div>`;
+  const cnt=id=>one?(draftSingles[id]||0):curBox.filter(c=>c===id).length;
+  f.innerHTML=top+mid+`<div class="fgrid">${FLAV.map(x=>{const n=cnt(x.id);return `<button class="fchip" data-f="${x.id}" style="--c:${x.c}"><b>${x.n}</b><small>${x.z}</small><span class="q ${n?"on":""}">${n||""}</span></button>`}).join("")}</div>`;
+  if(drop){const on=f.querySelectorAll(".slot2.on");if(on.length)on[on.length-1].classList.add("drop")}
+  f.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{flavMode=b.dataset.m;sfxTap(flavMode==="one"?2:4);renderFlav()});
+  f.querySelectorAll(".fchip").forEach(b=>b.onclick=()=>pickFlav(b.dataset.f));
+  f.querySelectorAll(".slot2.on").forEach(b=>b.onclick=()=>{if(boxLock)return;curBox.splice(+b.dataset.i,1);sfxSoft();renderFlav()});
+}
+function pickFlav(id){
+  if(flavMode==="one"){draftSingles[id]=(draftSingles[id]||0)+1;sfxTap(sgTotal());renderFlav();
+    const fc=document.querySelector('.fchip[data-f="'+id+'"]');if(fc){fc.classList.add("jelly");floatText(fc,"+"+rm(S.prices.xmn));const br=fc.getBoundingClientRect();burst(br.left+br.width/2,br.top+20,["✨","💗"],4)}
+    navigator.vibrate&&navigator.vibrate(10);syncXq();renderDraft();return}
+  if(boxLock||curBox.length>=4)return;curBox.push(id);sfxTap(curBox.length);renderFlav(true);
+  const fc=document.querySelector('.fchip[data-f="'+id+'"]');if(fc){fc.classList.add("jelly");const br=fc.getBoundingClientRect();burst(br.left+br.width/2,br.top+20,["✨","💗"],4)}
+  navigator.vibrate&&navigator.vibrate(10);if(curBox.length===4)completeBox()}
+function completeBox(){boxLock=true;const sl=document.querySelector(".slots");sl&&sl.classList.add("done");sfxLand(1);
+  setTimeout(()=>{draftBoxes.push([...curBox]);curBox=[];boxLock=false;sfxTap(5);
+    const d=document.querySelector('.dish[data-id="xmn"]');if(d){floatText(d,"+"+rm(S.prices.xmnbox));const br=d.getBoundingClientRect();burst(br.left+br.width/2,br.top+30,["🎁","✨","💗"],8)}
+    syncXq();renderFlav();renderDraft()},650)}
+function addItem(id,b){
+  const it=ITEMS.find(x=>x.id===id);draft[id]=(draft[id]||0)+1;
+  b.classList.remove("jelly");void b.offsetWidth;b.classList.add("jelly");
+  floatText(b,"+"+rm(S.prices[it.cat]));sfxTap(Object.values(draft).reduce((a,c)=>a+c,0));
+  const q=b.querySelector(".q");q.textContent=draft[id];q.className="q on";q.style.animation="none";void q.offsetWidth;q.style.animation="";
+  renderDraft();const br=b.getBoundingClientRect();burst(br.left+br.width/2,br.top+30,["✨","🍓","💗"],6);navigator.vibrate&&navigator.vibrate(10);
+}
+function renderDraft(){
+  const keys=ITEMS.filter(i=>draft[i.id]&&i.cat!=="xmn");
+  if(!keys.length&&!draftBoxes.length&&!sgTotal()){$("draft").innerHTML=`<div class="ticket"><div class="empty">点上面的甜品，小票就会慢慢印出来～</div></div>`;return}
+  const bx=draftBoxes.map((b,k)=>boxRow(b,k,S.prices.xmnbox,`<button class="mini" data-b="${k}">−</button>`)).join("");
+  const sg=FLAV.filter(f=>draftSingles[f.id]).map(f=>singleRow(f,draftSingles[f.id],S.prices.xmn,`<button class="mini" data-s="${f.id}">−</button>`)).join("");
+  const rows=keys.map(m=>`<div class="row"><span>${m.name}</span><span class="qy">×${draft[m.id]}</span><span class="am">${rm(draft[m.id]*S.prices[m.cat])}<button class="mini" data-m="${m.id}">−</button></span></div>`).join("");
+  $("draft").innerHTML=`<div class="ticket">${head(viewDate,hm(Date.now()),nextNo(),$("note").value.trim(),curSrc)}${bx}${sg}${rows}${foot({items:{...draft},boxes:draftBoxes,singles:draftSingles},draftTotal())}</div>`;
+  document.querySelectorAll(".mini").forEach(b=>b.onclick=()=>{
+    if(b.dataset.b!=null){draftBoxes.splice(+b.dataset.b,1);sfxSoft();renderMenu();renderDraft();return}
+    if(b.dataset.s){const f=b.dataset.s;draftSingles[f]--;if(!draftSingles[f])delete draftSingles[f];sfxSoft();renderMenu();renderDraft();return}
+    const id=b.dataset.m;draft[id]--;sfxSoft();if(!draft[id])delete draft[id];renderMenu();renderDraft()});
+}
+$("clear").onclick=()=>{sfxSoft();resetDraft();$("note").value="";renderMenu();renderDraft()};
+$("note").oninput=renderDraft;
+$("print").onclick=()=>{
+  if(!Object.keys(draft).length&&!draftBoxes.length&&!sgTotal()){floatText($("print"),curBox.length?"这盒还没选满 4 粒哦 🍡":"先点甜品哦 🍬");sfxSoft();return}
+  if(curBox.length){floatText($("print"),"这盒还没选满 4 粒哦 🍡");sfxSoft();return}
+  const o={no:nextNo(),id:"o"+Date.now()+Math.floor(Math.random()*1e3),src:curSrc,date:viewDate,time:Date.now(),note:$("note").value.trim(),items:(()=>{const it={...draft};draftBoxes.forEach(b=>b.forEach(f=>{const k="xmn_"+f;it[k]=(it[k]||0)+1}));Object.entries(draftSingles).forEach(([f,n])=>{const k="xmn_"+f;it[k]=(it[k]||0)+n});return it})(),...(draftBoxes.length?{boxes:draftBoxes.map(b=>[...b])}:{}),...(sgTotal()?{singles:{...draftSingles}}:{}),prices:{...S.prices},total:draftTotal(),torn:false};
+  S.orders.push(o);markDay(o.date);save();sfxPrint();
+  const d=$("draft");d.classList.remove("print-in");void d.offsetWidth;
+  d.firstElementChild.classList.add("print-in");
+  setTimeout(()=>{resetDraft();$("note").value="";renderMenu();renderDraft();renderRail();renderStats();$("rail").scrollTo({left:1e5,behavior:"smooth"})},650);
+  floatText($("print"),"嘶～出票啦 🎀");const P=document.querySelector(".printer");P.classList.remove("shake");void P.offsetWidth;P.classList.add("shake");const pr=P.getBoundingClientRect();burst(pr.left+pr.width/2,pr.top+40,["🎀","✨","🤍"],8);
+};
+function renderRail(){renderFilt();
+  const list=ords().filter(o=>!o.torn&&(filt==="all"||(o.src||"me")===filt));
+  if(!list.length){$("rail").innerHTML=`<div class="empty">还没有排队的小票 ☁️</div>`;return}
+  $("rail").innerHTML=list.map((o,i)=>`<div class="slip" data-id="${o.id}" style="--r:${i%2?1.8:-1.8}deg;--mag:${srcColor(o.src)}"><div class="ticket">${ticketHTML(o)}</div><button class="btn tbtn">✂ 撕下</button></div>`).join("");
+  document.querySelectorAll(".slip").forEach(el=>{
+    const no=el.dataset.id;let x0=null,dx=0;
+    el.querySelector(".tbtn").onclick=e=>{e.stopPropagation();tear(el,no,1)};
+    el.onpointerdown=e=>{if(e.target.closest(".tbtn"))return;x0=e.clientY;dx=0;try{el.setPointerCapture(e.pointerId)}catch(_){}el.style.transition="none";el.style.animation="none"};
+    el.onpointermove=e=>{if(x0==null)return;dx=Math.max(0,e.clientY-x0);el.style.transform=`translateY(${dx}px) rotate(${dx/25}deg)`};
+    const up=()=>{if(x0==null)return;x0=null;if(dx>70){el.style.transform="";tear(el,no,1)}else{el.style.transition="transform .4s cubic-bezier(.3,1.6,.5,1)";el.style.transform=""}};
+    el.onpointerup=up;el.onpointercancel=up;
+  });
+}
+function tear(el,no,dir){
+  el.style.transition="";el.style.transform="";el.style.animation="";
+  el.style.setProperty("--d",dir);el.classList.add("tear");const R=el.getBoundingClientRect();burst(R.left+R.width/2,R.top+R.height/2,["📄","✂️","✨","💗"],10);navigator.vibrate&&navigator.vibrate(30);sfxTear();
+  setTimeout(()=>{
+    const o=S.orders.find(x=>x.id===no);if(!o)return;
+    o.torn=true;o.ts=Date.now();markDay(o.date);save();renderRail();renderLedger();renderStats();flyTo(o,R);
+  },720);
+}
+function catStats(t,m){const rows=t.filter(o=>catQty(o,m.id));return{rows,cnt:rows.reduce((s,o)=>s+catQty(o,m.id),0),sum:rows.reduce((s,o)=>s+catAmt(o,m.id),0)}}
+const flv=(o,c)=>{if(c==="xmn"&&isNewX(o)){const t={};Object.keys(o.items).forEach(k=>{if(k.startsWith("xmn_"))t[k.slice(4)]=o.items[k]});const bx=isBox(o)?o.boxes.length:0,sg=sgN(o);return(bx?bx+"盒 ":"")+(sg?"单"+sg+"粒 ":"")+FLAV.filter(f=>t[f.id]).map(f=>f.n+"×"+t[f.id]).join(" ")}const its=catItems(c).filter(i=>o.items[i.id]);return(its.length>1||(its[0]&&its[0].fl))?its.map(i=>(i.fl?i.fl.n:"未选口味")+"×"+o.items[i.id]).join(" "):"×"+catQty(o,c)+"份"};
+function renderLedger(newOrder){
+  const t=ords().filter(o=>o.torn&&o.date===viewDate);
+  $("ledger").innerHTML=MENU.map(m=>{
+    const {rows,cnt,sum}=catStats(t,m);
+    const br=m.id==="xmn"?catItems(m.id).map(i=>({i,n:rows.reduce((s,o)=>s+(o.items[i.id]||0),0)})).filter(x=>x.n):[];
+    const fl=br.length?`<div class="fls">${br.map(x=>`<span class="fl2" style="--c:${x.i.fl?x.i.fl.c:"#eee"}">${x.i.fl?x.i.fl.n:"未选口味"} ${x.n}</span>`).join("")}</div>`:"";
+    const stubs=rows.map((o,i)=>`<button class="stub" data-o="${o.id}" style="--r:${(i%3-1)*2}deg">${o.date.slice(5)} #${pad(o.no)} ${flv(o,m.id)}</button>`).join("")||`<span class="c">还没有～</span>`;
+    return `<div class="cat ${newOrder&&catQty(newOrder,m.id)?"bump":""}" data-c="${m.id}" style="--c:${m.c}"><div class="t"><b class="ct">${ico(m,28)} ${m.name}</b><span class="sum" data-id="${m.id}" data-v="${sum}">${rm(sum)}</span></div><div class="c">${catLabel(rows,m,cnt)} · 点开看明细 ›</div>${fl}<div class="stubs">${stubs}</div></div>`;
+  }).join("");
+  document.querySelectorAll("#ledger .sum").forEach(e=>{setNum(e,+e.dataset.v,rm,PS[e.dataset.id]||0);PS[e.dataset.id]=+e.dataset.v});
+}
+function renderStats(){renderAgents();renderDays();renderRev();
+  const t=ords().filter(o=>o.date===viewDate);
+  const done=t.filter(o=>o.torn);
+  setNum($("sTotal"),rm(done.reduce((s,o)=>s+o.total,0)),rm);
+  setNum($("sPend"),t.length-done.length,Math.round);
+  setNum($("sCnt"),done.reduce((s,o)=>s+qty(o),0),Math.round);
+}
+function renderPrices(){
+  $("prices").innerHTML=[["雪媚娘 单粒","xmn"],["雪媚娘 一盒（4粒）","xmnbox"],["冰豆花","dhh"],["纽约软曲奇","ck"]].map(([n,k])=>`<label>${n}<span>RM <input type="number" step="0.1" min="0" data-id="${k}" value="${S.prices[k]}"></span></label>`).join("");
+  document.querySelectorAll("#prices input").forEach(i=>i.onchange=()=>{S.prices[i.dataset.id]=Math.max(0,+i.value||0);markCfg();save();renderMenu();renderDraft()});
+}
+let rt=0;
+$("reset").onclick=()=>{
+  if(!rt){$("reset").textContent="再点一次确认清空 🥺";rt=setTimeout(()=>{rt=0;$("reset").textContent="清空这一天的记录"},3000);return}
+  clearTimeout(rt);rt=0;S.orders.forEach(o=>{if(o.date===viewDate){o.deleted=true;o.ts=Date.now()}});markDay(viewDate);save();$("reset").textContent="清空这一天的记录";renderAll();
+};
+function renderAll(){renderDate();renderSrc();renderMenu();renderDraft();renderRail();renderLedger();renderStats();renderPrices();renderAgentSet()}
+
+const PS={};
+function setNum(el,to,fmt,from){from=from??(el._v||0);if(el._v!==undefined&&el._v!==to)el.animate([{transform:"scale(1.3)"},{transform:"none"}],{duration:400,easing:"ease-out"});el._v=to;const t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/700),e=1-Math.pow(1-k,3);el.textContent=fmt(from+(to-from)*e);if(k<1)requestAnimationFrame(f)})(t0)}
+function burst(x,y,list,n){for(let i=0;i<n;i++){const el=document.createElement("div");el.className="spark";el.textContent=list[i%list.length];el.style.left=x+"px";el.style.top=y+"px";el.style.fontSize=(13+Math.random()*12)+"px";document.body.appendChild(el);const a=Math.random()*Math.PI*2,d=35+Math.random()*60;el.animate([{transform:"translate(0,0) scale(.3)",opacity:1},{transform:`translate(${Math.cos(a)*d}px,${Math.sin(a)*d-35}px) scale(1.1) rotate(${Math.random()*360}deg)`,opacity:0}],{duration:700+Math.random()*400,easing:"cubic-bezier(.2,.8,.3,1)"}).onfinish=()=>el.remove()}}
+function toast(t){const e=document.createElement("div");e.className="toast";e.textContent=t;document.body.appendChild(e);setTimeout(()=>e.remove(),1900)}
+function flyTo(o,R){const cards=document.querySelectorAll("#ledger .cat");MENU.forEach((m,i)=>{if(!catQty(o,m.id)||!cards[i])return;const c=cards[i].getBoundingClientRect(),sx=R.left+R.width/2,sy=R.top+R.height/2;const el=document.createElement("div");el.className="spark";el.innerHTML=ico(m,40);el.style.cssText+=`left:${sx}px;top:${sy}px;font-size:32px`;document.body.appendChild(el);const dx=c.left+40-sx,dy=c.top+20-sy;el.animate([{transform:"translate(0,0) scale(1)"},{transform:`translate(${dx*.5}px,${dy*.5-90}px) scale(1.5) rotate(180deg)`,offset:.5},{transform:`translate(${dx}px,${dy}px) scale(.5) rotate(360deg)`,opacity:.6}],{duration:850+i*150,easing:"ease-in-out"}).onfinish=()=>{el.remove();cards[i].classList.remove("bump");void cards[i].offsetWidth;cards[i].classList.add("bump");burst(c.left+40,c.top+20,["💗","✨","🍓"],6);sfxLand(i)}});toast(`✂ #${pad(o.no)} 已入账 💗`)}
+(function(){const sky=document.createElement("div");sky.className="sky";["🌸","☁️","✨","🍓","🤍","🍡","🌷"].forEach((e,k)=>{for(let j=0;j<2;j++){const i=document.createElement("i");i.textContent=e;i.style.cssText=`left:${Math.random()*100}%;font-size:${14+Math.random()*18}px;animation-duration:${20+Math.random()*20}s;animation-delay:-${Math.random()*30}s;--x:${(Math.random()-.5)*90}px`;sky.appendChild(i)}});document.body.prepend(sky)})();
+(function(){const els=document.querySelectorAll("h2,.menu,.printer,.actions,.board,#ledger,.agents,.rev,.days,details,.foot,.daynav");let io;try{io=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add("in");io.unobserve(x.target)}}),{threshold:.08})}catch(e){}els.forEach(e=>{e.classList.add("reveal");io&&io.observe(e)});setTimeout(()=>els.forEach(e=>e.classList.add("in")),2500)})();
+
+const ICONS={
+xmn:`<ellipse cx="32" cy="57" rx="19" ry="3.5" fill="#6b4f4f" opacity=".1"/><path d="M9 41C9 26 19 18 32 18s23 8 23 23c0 9-9 15-23 15S9 50 9 41z" fill="#fffdfb" stroke="#f0d2d8" stroke-width="2"/><path d="M17 28c3-4 8-6 13-6" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M32 9c-5 0-9 4-8 8 1 4 4 6 8 6s7-2 8-6c1-4-3-8-8-8z" fill="#ff6f8a"/><path d="M27 9l5 3 5-3-5-4z" fill="#7ac79b"/><circle cx="29" cy="15" r=".9" fill="#ffd0da"/><circle cx="35" cy="18" r=".9" fill="#ffd0da"/><circle cx="24" cy="40" r="2.4" fill="#6b4f4f"/><circle cx="40" cy="40" r="2.4" fill="#6b4f4f"/><path d="M29 44q3 3 6 0" stroke="#6b4f4f" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="19" cy="45" r="3.4" fill="#ffb3c1" opacity=".75"/><circle cx="45" cy="45" r="3.4" fill="#ffb3c1" opacity=".75"/>`,
+dhh:`<ellipse cx="32" cy="58" rx="20" ry="3.5" fill="#6b4f4f" opacity=".1"/><path d="M8 30h48c0 14-10 24-24 24S8 44 8 30z" fill="#f7d9c4"/><ellipse cx="32" cy="30" rx="24" ry="8" fill="#fff6e6"/><ellipse cx="32" cy="28" rx="20" ry="5.8" fill="#fff"/><circle cx="21" cy="27" r="2.4" fill="#b8554e"/><circle cx="29" cy="25.5" r="2.4" fill="#b8554e"/><circle cx="38" cy="28" r="2.4" fill="#b8554e"/><circle cx="44" cy="26" r="2.2" fill="#b8554e"/><ellipse cx="33" cy="29.5" rx="3" ry="1.8" fill="#e8b97a"/><ellipse cx="25" cy="29.5" rx="2.6" ry="1.6" fill="#e8b97a"/><rect x="40" y="13" width="10" height="10" rx="2.5" fill="#dff3ff" stroke="#bfe4f7" stroke-width="1.5" transform="rotate(14 45 18)"/><circle cx="24" cy="43" r="2.2" fill="#6b4f4f"/><circle cx="40" cy="43" r="2.2" fill="#6b4f4f"/><path d="M29 46q3 2.8 6 0" stroke="#6b4f4f" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="19" cy="46" r="3" fill="#ffb3c1" opacity=".7"/><circle cx="45" cy="46" r="3" fill="#ffb3c1" opacity=".7"/>`,
+ck:`<ellipse cx="32" cy="58" rx="21" ry="3.5" fill="#6b4f4f" opacity=".1"/><path d="M32 10c13 0 23 9 23 23s-10 22-23 22S9 47 9 33 19 10 32 10z" fill="#e9b673" stroke="#cf9450" stroke-width="2"/><path d="M18 22c4-5 9-7 14-7" stroke="#f5d29c" stroke-width="3" stroke-linecap="round" fill="none"/><rect x="38" y="16" width="8" height="6" rx="2" fill="#6b4036" transform="rotate(20 42 19)"/><rect x="16" y="30" width="7" height="6" rx="2" fill="#6b4036" transform="rotate(-15 19 33)"/><rect x="46" y="31" width="7" height="6" rx="2" fill="#6b4036" transform="rotate(10 49 34)"/><rect x="22" y="47" width="8" height="5" rx="2" fill="#6b4036" transform="rotate(12 26 49)"/><rect x="40" y="46" width="7" height="6" rx="2" fill="#6b4036" transform="rotate(-18 43 49)"/><rect x="26" y="17" width="6" height="5" rx="2" fill="#6b4036"/><circle cx="26" cy="35" r="2.3" fill="#6b4f4f"/><circle cx="39" cy="35" r="2.3" fill="#6b4f4f"/><path d="M30 39q2.5 3 5 0" stroke="#6b4f4f" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="22" cy="40" r="3" fill="#ff9aa8" opacity=".6"/><circle cx="43" cy="40" r="3" fill="#ff9aa8" opacity=".6"/>`};
+function ico(m,w){w=w||54;return `<svg viewBox="0 0 64 64" width="${w}" height="${w}">${ICONS[m.id]}</svg>`}
+/* sources */
+const SRC=[{id:"me",c:"#ffb7c5"},{id:"a1",c:"#a9d8f5"},{id:"a2",c:"#cdbdf2"}];
+let curSrc="me",filt="all";
+const srcName=id=>id==="a1"?S.agents[0]:id==="a2"?S.agents[1]:"店面";
+const srcColor=id=>(SRC.find(x=>x.id===(id||"me"))||SRC[0]).c;
+const qty=o=>ITEMS.reduce((a,i)=>a+((isNewX(o)&&i.cat==="xmn")?0:(o.items[i.id]||0)),0)+(isBox(o)?o.boxes.length:0)+sgN(o);
+const nextNo=()=>1+Math.max(0,...ords().filter(o=>o.date===viewDate).map(o=>o.no));
+function renderSrc(){$("srcRow").innerHTML=SRC.map(x=>`<button class="chip ${curSrc===x.id?"on":""}" style="--c:${x.c}" data-s="${x.id}">${esc(srcName(x.id))}</button>`).join("");document.querySelectorAll("#srcRow .chip").forEach(b=>b.onclick=()=>{curSrc=b.dataset.s;sfxTap(1+SRC.findIndex(x=>x.id===curSrc)*2);renderSrc();renderDraft()})}
+function renderFilt(){const p=ords().filter(o=>!o.torn);const L=[{id:"all",c:"#f4f1e6",t:"全部",n:p.length},...SRC.map(x=>({id:x.id,c:x.c,t:srcName(x.id),n:p.filter(o=>(o.src||"me")===x.id).length}))];$("filt").innerHTML=L.map(x=>`<button class="chip ${filt===x.id?"on":""}" style="--c:${x.c}" data-f="${x.id}">${esc(x.t)} ${x.n}</button>`).join("");document.querySelectorAll("#filt .chip").forEach(b=>b.onclick=()=>{filt=b.dataset.f;sfxFlip();renderRail()})}
+function renderAgents(){const day=ords().filter(o=>o.date===viewDate);$("agents").innerHTML=SRC.map(x=>{const os=day.filter(o=>(o.src||"me")===x.id),dn=os.filter(o=>o.torn);return `<div class="ag" style="--c:${x.c}"><b>${esc(srcName(x.id))}</b><span class="big">${rm(dn.reduce((a,o)=>a+o.total,0))}</span><small>${dn.reduce((a,o)=>a+qty(o),0)} 份 · ${os.length} 单${os.length>dn.length?` · ${os.length-dn.length}待撕`:""}</small></div>`}).join("")}
+function renderAgentSet(){$("agentset").innerHTML=`<div style="margin-top:10px">代理名称</div>`+[0,1].map(i=>`<label>代理 ${i+1}<input type="text" maxlength="6" style="width:110px" data-i="${i}" value="${esc(S.agents[i])}"></label>`).join("");document.querySelectorAll("#agentset input").forEach(e=>e.onchange=()=>{S.agents[+e.dataset.i]=e.value.trim().slice(0,6)||"代理"+"AB"[+e.dataset.i];markCfg();save();renderSrc();renderAgents();renderRail();renderDraft()})}
+/* days */
+const WD=["日","一","二","三","四","五","六"];
+const pd=t=>{const [y,m,d]=t.split("-").map(Number);return new Date(y,m-1,d)};
+const fd=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+function renderDate(){const d=pd(viewDate),t=viewDate===today();$("date").innerHTML=`<b>${d.getMonth()+1}月${d.getDate()}日 星期${WD[d.getDay()]}</b><small>${t?"今天也要甜甜的 ☁️":viewDate<today()?"翻看过去的账本 📖":"未来的一页 ✨"}</small>`;$("toToday").style.display=t?"none":""}
+function setDay(ds){if(ds===viewDate)return;viewDate=ds;resetDraft();$("note").value="";filt="all";sfxFlip();renderAll();[".stats",".board","#ledger","#agents"].forEach(q=>{const e=document.querySelector(q);e.classList.remove("swap");void e.offsetWidth;e.classList.add("swap")})}
+function renderDays(){const set=new Set(S.orders.map(o=>o.date));set.add(today());set.add(viewDate);const days=[...set].sort().reverse().slice(0,60);$("days").innerHTML=days.map(ds=>{const os=ords().filter(o=>o.date===ds),dn=os.filter(o=>o.torn),d=pd(ds);return `<button class="day ${ds===viewDate?"cur":""}" data-d="${ds}"><span>${d.getMonth()+1}/${d.getDate()} 周${WD[d.getDay()]}${ds===today()?" · 今天":""}</span><span>${os.length}单 · ${dn.reduce((a,o)=>a+qty(o),0)}份</span><b>${rm(dn.reduce((a,o)=>a+o.total,0))}</b>${os.length>dn.length?`<i>还有 ${os.length-dn.length} 张小票没撕</i>`:""}</button>`}).join("");document.querySelectorAll(".day").forEach(b=>b.onclick=()=>{setDay(b.dataset.d);window.scrollTo({top:0,behavior:"smooth"})})}
+$("prevD").onclick=()=>{const d=pd(viewDate);d.setDate(d.getDate()-1);setDay(fd(d))};
+$("nextD").onclick=()=>{const d=pd(viewDate);d.setDate(d.getDate()+1);setDay(fd(d))};
+$("toToday").onclick=()=>setDay(today());
+/* sound */
+let AC=null;
+function ac(){if(!S.sound)return null;try{if(!AC)AC=new(window.AudioContext||window.webkitAudioContext)();if(AC.state==="suspended")AC.resume();return AC}catch(e){return null}}
+function tone(f,t,d,v,type){const a=ac();if(!a)return;const o=a.createOscillator(),g=a.createGain(),t0=a.currentTime+t;o.type=type||"sine";o.frequency.value=f;g.gain.setValueAtTime(.0001,t0);g.gain.exponentialRampToValueAtTime(v,t0+.012);g.gain.exponentialRampToValueAtTime(.0001,t0+d);o.connect(g);g.connect(a.destination);o.start(t0);o.stop(t0+d+.05)}
+function bell(f,t,v){v=v||.1;tone(f,t,1.1,v);tone(f*2.01,t,.5,v*.3);tone(f*3,t,.25,v*.12)}
+function noiseBurst(t,d,v,ft,f0,f1,crackle){const a=ac();if(!a)return;const n=Math.floor(a.sampleRate*d),b=a.createBuffer(1,n,a.sampleRate),x=b.getChannelData(0);for(let i=0;i<n;i++)x[i]=(Math.random()*2-1)*(crackle?(Math.random()<.35?1:.15):1)*(1-i/n);const sr=a.createBufferSource();sr.buffer=b;const f=a.createBiquadFilter();f.type=ft;const t0=a.currentTime+t;f.frequency.setValueAtTime(f0,t0);f.frequency.exponentialRampToValueAtTime(f1,t0+d);const g=a.createGain();g.gain.value=v;sr.connect(f);f.connect(g);g.connect(a.destination);sr.start(t0)}
+const PENTA=[523.25,587.33,659.25,783.99,880,1046.5,1174.7];
+function sfxTap(n){const f=PENTA[(Math.max(1,n)-1)%7];bell(f,0,.1);tone(f/2,0,.25,.04)}
+function sfxPrint(){for(let i=0;i<9;i++)noiseBurst(i*.085,.06,.14,"bandpass",1500+(i%2)*500,900,false);tone(180,0,.8,.03,"triangle");bell(1318.5,.85,.07);bell(1568,.95,.05)}
+function sfxTear(){noiseBurst(0,.4,.4,"highpass",1200,5000,true);noiseBurst(.02,.3,.15,"bandpass",2500,900,true)}
+function sfxLand(i){[0,2,4].forEach((k,j)=>bell(PENTA[k+(i%2)],j*.09,.07))}
+function sfxFlip(){noiseBurst(0,.18,.2,"bandpass",800,2600,false)}
+function sfxSoft(){tone(330,0,.25,.07);tone(262,.08,.3,.05)}
+function renderSnd(){$("snd").textContent=S.sound?"🔔":"🔕"}
+$("snd").onclick=()=>{S.sound=!S.sound;save();renderSnd();if(S.sound){ac();bell(PENTA[2],0,.1)}};
+$("logo").innerHTML=ico(MENU[0],30);renderSnd();
+
+/* cloud sync */
+let DB=null,dirtyDays=new Set(),dirtyCfg=false,Q=Promise.resolve(),firstDays=true,firstCfg=true,ft=0;
+function setSync(t,bad){const e=$("sync");e.textContent=t;e.className="syncb"+(bad?" bad":"")}
+function markDay(d){dirtyDays.add(d)}function markCfg(){dirtyCfg=true}
+function flush(){if(!DB)return;clearTimeout(ft);ft=setTimeout(()=>{Q=Q.then(doFlush)},300)}
+async function doFlush(){const days=[...dirtyDays],cfg=dirtyCfg;if(!days.length&&!cfg)return;dirtyDays.clear();dirtyCfg=false;setSync("同步中…");
+ try{for(const d of days){const os=S.orders.filter(o=>o.date===d),r=DB.doc("days/"+d);if(os.length)await r.set({orders:os});else await r.delete()}
+  if(cfg)await DB.doc("config/main").set({prices:S.prices,agents:S.agents});
+  setSync("☁️ 已云端保存")}
+ catch(e){days.forEach(d=>dirtyDays.add(d));if(cfg)dirtyCfg=true;setSync("⚠️ 云端暂时失败，已存本机，稍后重试",1);setTimeout(flush,6000)}}
+const ordSig=()=>JSON.stringify(S.orders.map(o=>[o.id,o.torn,o.total,o.src,o.deleted]));
+function renderSync(){if(document.querySelector(".slip.tear"))return;renderRail();renderLedger();renderStats();renderDraft()}
+async function initDB(){
+ try{if(supaOn()){DB=await supaLogin()}else if(typeof claude!=="undefined"&&claude.use){DB=await claude.use("db")}else{setSync("💾 保存在本机浏览器");return}}catch(e){DB=null}
+ if(DB&&dirtyCfg)flush();
+ if(!DB){setSync("📵 未连接云端，先存在本机",1);return}
+ setSync("连接云端…");
+ DB.collection("days").onSnapshot(snap=>{
+  if(snap.metadata.fromCache&&snap.empty)return;
+  if(firstDays){firstDays=false;if(snap.empty&&S.orders.length){S.orders.forEach(o=>markDay(o.date));flush();toast("已把本机账本上传云端 ☁️");return}}
+  const before=ordSig(),map=new Map();let heal=false;
+  snap.docs.forEach(d=>{const x=d.data();if(x&&Array.isArray(x.orders))x.orders.forEach(o=>map.set(o.id,o))});
+  S.orders.forEach(o=>{const r=map.get(o.id);if(!r){map.set(o.id,o);markDay(o.date);heal=true}else{const a=r.ts||0,b=o.ts||0;let t,d,ts;if(b>a){t=!!o.torn;d=!!o.deleted;ts=b}else if(b<a){t=!!r.torn;d=!!r.deleted;ts=a}else{t=!!(r.torn||o.torn);d=!!(r.deleted||o.deleted);ts=a}const m={...r,torn:t,deleted:d,ts:ts};if(t!==!!r.torn||d!==!!r.deleted){markDay(o.date);heal=true}map.set(o.id,m)}});
+  S.orders=[...map.values()].sort((a,b)=>a.time-b.time);
+  if(heal)flush();
+  saveLocal();if(ordSig()!==before)renderSync();
+  if(!dirtyDays.size)setSync("☁️ 已云端保存")
+ },e=>setSync("⚠️ 云端连接失败，仅本机",1));
+ DB.doc("config/main").onSnapshot(snap=>{
+  if(snap.metadata.fromCache&&!snap.exists)return;
+  const first=firstCfg;firstCfg=false;
+  if(!snap.exists){if(first){markCfg();flush()}return}
+  if(dirtyCfg)return;
+  const x=snap.data(),sg=JSON.stringify([S.prices,S.agents]);
+  if(x.prices)Object.assign(S.prices,x.prices);if(S.prices.xmn===6){S.prices.xmn=4.8;markCfg();flush()}
+  if(Array.isArray(x.agents)&&x.agents.length===2)S.agents=x.agents;
+  if(JSON.stringify([S.prices,S.agents])!==sg){saveLocal();renderMenu();renderDraft();renderPrices();renderAgentSet();renderSrc();renderRail()}
+ },()=>{});
+}
+$("exp").onclick=async()=>{
+ try{
+  const q=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
+  const rows=[["日期","时间","单号","来源","备注",...ITEMS.map(i=>i.name),"盒数","单粒数","各盒口味","合计(RM)","状态"].map(q).join(",")];
+  [...S.orders].sort((a,b)=>a.time-b.time).forEach(o=>rows.push([o.date,hm(o.time),o.no,srcName(o.src||"me"),o.note||"",...ITEMS.map(i=>o.items[i.id]||0),(o.boxes||[]).length,xParts([o]).sg,(o.boxes||[]).map(flavSummary).join(" | "),o.total,o.torn?"已入账":"待撕"].map(q).join(",")));
+  if(await saveFile("sweet_bites02_账本.csv","\ufeff"+rows.join("\n"),"text/csv"))toast("已导出 CSV ✅")}
+ catch(e){if(!e||e.code!=="declined")toast("导出没成功，稍后再试")}};
+
+/* detail sheets */
+function closeSheet(fast){document.querySelectorAll(".sheet,.sheet-bg").forEach(e=>{if(fast){e.remove();return}e.classList.remove("open");setTimeout(()=>e.remove(),420)})}
+function openSheet(html){closeSheet(true);const bg=document.createElement("div");bg.className="sheet-bg";const sh=document.createElement("div");sh.className="sheet";sh.innerHTML='<button class="sx">✕</button>'+html;document.body.append(bg,sh);bg.onclick=()=>closeSheet();sh.querySelector(".sx").onclick=()=>closeSheet();requestAnimationFrame(()=>{bg.classList.add("open");sh.classList.add("open")});sfxFlip();return sh}
+function openTicket(id){const o=S.orders.find(x=>x.id===id);if(!o)return;
+ const sh=openSheet(`<div class="sh-t">小票明细 <small>${o.torn?"已入账":"排单中"}</small></div><div class="tk"><div class="ticket unroll">${ticketHTML(o)}</div></div><div class="sh-a"><button class="btn ghost" id="shBack">↩ 放回排单</button><button class="btn ghost" id="shDel">🗑 删除这张</button></div>`);
+ const back=sh.querySelector("#shBack"),del=sh.querySelector("#shDel");if(!o.torn)back.style.display="none";
+ const done=()=>{closeSheet();renderRail();renderLedger();renderStats()};
+ back.onclick=()=>{o.torn=false;o.ts=Date.now();markDay(o.date);save();done();toast("已放回排单 ↩");sfxSoft()};
+ let c=0;del.onclick=()=>{if(!c){c=1;del.textContent="再点一次确认删除 🥺";setTimeout(()=>{c=0;del.textContent="🗑 删除这张"},3000);return}o.deleted=true;o.ts=Date.now();markDay(o.date);save();done();toast("已删除这张小票")}}
+function openCat(cat){const m=MENU.find(x=>x.id===cat);if(!m)return;const t=ords().filter(o=>o.torn&&o.date===viewDate),{rows,cnt,sum}=catStats(t,m);
+ const br=cat==="xmn"?catItems(cat).map(i=>({i,n:rows.reduce((s,o)=>s+(o.items[i.id]||0),0)})).filter(x=>x.n):[],mx=Math.max(1,...br.map(x=>x.n));
+ const bars=br.map(x=>`<div class="bar2"><span>${x.i.fl?x.i.fl.n+" "+x.i.fl.z:"未选口味"}</span><i style="--w:${x.n/mx*100}%;--c:${x.i.fl?x.i.fl.c:"#eee"}"></i><b>${x.n}</b></div>`).join("");
+ const list=rows.map(o=>`<button class="lrow" data-o="${o.id}"><span>#${pad(o.no)} · ${hm(o.time)} · ${esc(srcName(o.src||"me"))}</span><span>${flv(o,cat)}</span><b>${rm(catAmt(o,cat))}</b></button>`).join("")||'<div class="empty">这一天还没有记录～</div>';
+ const sh=openSheet(`<div class="sh-t">${ico(m,34)} ${m.name} <small>${viewDate}</small></div><div class="sh-s"><div><b>${cat==="xmn"?xParts(rows).bx:cnt}</b><span>${cat==="xmn"?"盒"+(xParts(rows).sg?" + "+xParts(rows).sg+"单粒":"")+"（"+cnt+"粒）":"份"}</span></div><div><b>${rm(sum)}</b><span>金额</span></div><div><b>${rows.length}</b><span>张小票</span></div></div>${bars?'<div class="sh-h">口味分布</div>'+bars:""}<div class="sh-h">每张小票（点开看小票）</div>${list}`);
+ sh.querySelectorAll(".lrow").forEach(b=>b.onclick=()=>openTicket(b.dataset.o))}
+$("ledger").onclick=e=>{const st=e.target.closest(".stub");if(st){openTicket(st.dataset.o);return}const c=e.target.closest(".cat");if(c)openCat(c.dataset.c)};
+if(S.prices.xmn===6){S.prices.xmn=4.8;dirtyCfg=true;saveLocal()}
+
+/* total revenue */
+let revRange="month",revPrev=0;
+function inRev(d,r){const t=today();if(r==="all")return true;if(r==="today")return d===t;if(r==="week"){const a=pd(t);a.setDate(a.getDate()-6);return d>=fd(a)&&d<=t}return d.slice(0,7)===t.slice(0,7)}
+function renderRev(){
+ const el=$("rev");if(!el)return;
+ const all=ords(),done=all.filter(o=>o.torn&&inRev(o.date,revRange)),pend=all.filter(o=>!o.torn&&inRev(o.date,revRange));
+ const sum=a=>a.reduce((x,o)=>x+o.total,0),total=sum(done),pendAmt=sum(pend),n=done.length,pcs=done.reduce((a,o)=>a+qty(o),0);
+ let keys=[];
+ if(revRange==="week"){const a=pd(today());for(let i=6;i>=0;i--){const d=new Date(a);d.setDate(a.getDate()-i);keys.push(fd(d))}}
+ else if(revRange==="month"){const t=pd(today());for(let i=1;i<=t.getDate();i++)keys.push(today().slice(0,8)+String(i).padStart(2,"0"))}
+ else if(revRange==="all"){keys=[...new Set(done.map(o=>o.date.slice(0,7)))].sort().slice(-12)}
+ const val=k=>sum(done.filter(o=>revRange==="all"?o.date.slice(0,7)===k:o.date===k)),vals=keys.map(val),mx=Math.max(1,...vals),bi=vals.indexOf(Math.max(...vals,0));
+ const k2=k=>k.slice(0,4)+"年"+(+k.slice(5))+"月";
+ const lab=k=>revRange==="all"?(+k.slice(5))+"月":(+k.slice(8));
+ const bestTxt=n&&vals[bi]>0?`最高：${revRange==="all"?k2(keys[bi]):keys[bi].slice(5)} · ${rm(vals[bi])}`:"还没有入账记录～";
+ const chart=keys.map((k,i)=>`<button class="cbar ${i===bi&&vals[i]>0?"cur":""}" data-k="${k}" data-v="${vals[i]}"><i style="--h:${vals[i]?Math.max(5,vals[i]/mx*82):2}%;--d:${i*22}ms"></i><small>${lab(k)}</small></button>`).join("");
+ const dess=MENU.map(m=>({m,v:done.reduce((a,o)=>a+(catQty(o,m.id)?catAmt(o,m.id):0),0)}));const dm=Math.max(1,...dess.map(x=>x.v)),dt=dess.reduce((a,x)=>a+x.v,0)||1;
+ const dh=dess.map(x=>`<div class="rb"><span>${esc(x.m.name)}</span><i style="--w:${Math.max(2,x.v/dm*100)}%;--c:${x.m.c}"></i><b>${rm(x.v)} · ${Math.round(x.v/dt*100)}%</b></div>`).join("");
+ const sr=SRC.map(x=>({x,v:sum(done.filter(o=>(o.src||"me")===x.id))}));const sm=Math.max(1,...sr.map(y=>y.v));
+ const sh=sr.map(y=>`<div class="rb"><span>${esc(srcName(y.x.id))}</span><i style="--w:${Math.max(2,y.v/sm*100)}%;--c:${y.x.c}"></i><b>${rm(y.v)}</b></div>`).join("");
+ const RL={today:"今天",week:"近 7 天",month:"本月",all:"全部时间"};
+ el.innerHTML=`<div class="rtabs">${Object.keys(RL).map(k=>`<button class="rtab ${revRange===k?"on":""}" data-r="${k}">${k==="week"?"近7天":RL[k]}</button>`).join("")}</div>
+<div class="rbig"><small>${RL[revRange]} · 总营业额（已撕入账）</small><b id="revTotal">${rm(total)}</b><small>${pendAmt?`另有 ${rm(pendAmt)} 的小票还没撕`:"小票都已入账 ✨"}</small></div>
+<div class="rgrid"><div><b>${n}</b><span>张小票</span></div><div><b>${pcs}</b><span>份</span></div><div><b>${rm(n?total/n:0)}</b><span>平均每单</span></div></div>
+${keys.length?`<div class="sh-h">每${revRange==="all"?"月":"天"}营业额（点柱子看数字）</div><div class="chart">${chart}</div><div class="cinfo" id="cinfo">${bestTxt}</div>`:""}
+<div class="sh-h">各甜品</div>${dh}<div class="sh-h">各来源（店面 / 代理）</div>${sh}`;
+ setNum($("revTotal"),total,rm,revPrev);revPrev=total;
+ el.querySelectorAll(".rtab").forEach(b=>b.onclick=()=>{revRange=b.dataset.r;sfxTap(revRange==="today"?1:revRange==="week"?2:revRange==="month"?3:4);renderRev()});
+ el.querySelectorAll(".cbar").forEach(b=>b.onclick=()=>{el.querySelectorAll(".cbar").forEach(x=>x.classList.remove("cur"));b.classList.add("cur");const k=b.dataset.k;$("cinfo").textContent=(revRange==="all"?k2(k):k.slice(5))+" · "+rm(+b.dataset.v);sfxTap(3)});
+}
+
+/* backup / restore */
+async function saveFile(name,text,mime){
+ try{if(typeof claude!=="undefined"&&claude.use){const dl=await claude.use("downloads");if(dl){await dl.save({filename:name,data:text});return true}}}catch(e){if(e&&e.code==="declined")return false}
+ try{const b=new Blob([text],{type:mime||"text/plain"}),u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),3000);return true}catch(e){toast("导出没成功，稍后再试");return false}
+}
+$("expj").onclick=async()=>{const data={app:"sweet_bites02",version:1,exportedAt:new Date().toISOString(),prices:S.prices,agents:S.agents,orders:S.orders};if(await saveFile("sweet_bites02_备份_"+today()+".json",JSON.stringify(data,null,1),"application/json"))toast("已导出备份 ✅")};
+$("impj").onclick=()=>$("impf").click();
+$("impf").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;
+ try{const d=JSON.parse(await f.text());if(d.app!=="sweet_bites02"||!Array.isArray(d.orders))throw 0;
+  let add=0,upd=0;const idx=new Map(S.orders.map(o=>[o.id,o]));
+  d.orders.forEach(o=>{if(!o||!o.id||!o.date||!o.items||!o.prices)return;const x=idx.get(o.id);if(!x){S.orders.push(o);idx.set(o.id,o);markDay(o.date);add++}else if((o.ts||0)>(x.ts||0)){Object.assign(x,o);markDay(o.date);upd++}});
+  if(d.prices&&typeof d.prices==="object"){Object.assign(S.prices,d.prices);markCfg()}
+  if(Array.isArray(d.agents)&&d.agents.length===2){S.agents=d.agents;markCfg()}
+  S.orders.sort((a,b)=>a.time-b.time);save();renderAll();sfxLand(1);burst(innerWidth/2,innerHeight/2,["🍡","✨","💗"],10);
+  toast(`已导入 ${add} 张新小票${upd?`，更新 ${upd} 张`:""} ✅`)}
+ catch(err){toast("这个文件不是 sweet_bites02 的备份")}};
+
+/* supabase */
+let SB=null;
+const supaOn=()=>!!(window.SB_URL&&window.SB_KEY&&!/xxxx/.test(window.SB_URL)&&window.supabase);
+function showLogin(){return new Promise(res=>{
+ const o=document.createElement("div");o.className="login";
+ o.innerHTML=`<div class="lcard"><div class="lico">${ico(MENU[0],64)}</div><h3>sweet_bites02</h3><p>登录后才能看到你的账本 ☁️</p><input id="lem" type="email" placeholder="邮箱" autocomplete="username"><input id="lpw" type="password" placeholder="密码" autocomplete="current-password"><div class="lerr" id="lerr"></div><button class="btn" id="lgo">登录</button></div>`;
+ document.body.appendChild(o);
+ const go=async()=>{const em=$("lem").value.trim(),pw=$("lpw").value;if(!em||!pw){$("lerr").textContent="请输入邮箱和密码";return}
+  $("lgo").disabled=true;$("lerr").textContent="";
+  const {data,error}=await SB.auth.signInWithPassword({email:em,password:pw});$("lgo").disabled=false;
+  if(error||!data.session){$("lerr").textContent="邮箱或密码不对哦";return}
+  o.remove();res(data.session)};
+ $("lgo").onclick=go;$("lpw").onkeydown=e=>{if(e.key==="Enter")go()};
+})}
+async function supaLogin(){
+ SB=supabase.createClient(window.SB_URL,window.SB_KEY);
+ let {data:{session}}=await SB.auth.getSession();
+ if(!session)session=await showLogin();
+ SB.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT")location.reload()});
+ $("outbtn").style.display="";$("outbtn").onclick=()=>SB.auth.signOut();
+ return makeSupaDB(SB,session.user.id);
+}
+function makeSupaDB(sb,uid){
+ const loaders=[];
+ setInterval(()=>loaders.forEach(f=>f()),30000);
+ document.addEventListener("visibilitychange",()=>{if(!document.hidden)loaders.forEach(f=>f())});
+ const watch=(name,table,load)=>{loaders.push(load);load();try{sb.channel(name+uid).on("postgres_changes",{event:"*",schema:"public",table},load).subscribe()}catch(e){}};
+ return{
+  doc(path){const [col,id]=path.split("/");return{
+   async set(obj){const now=new Date().toISOString();
+    const r=col==="days"?await sb.from("days").upsert({user_id:uid,day:id,orders:obj.orders,updated_at:now}):await sb.from("config").upsert({user_id:uid,data:obj,updated_at:now});
+    if(r.error)throw r.error},
+   async delete(){if(col==="days"){const r=await sb.from("days").delete().eq("user_id",uid).eq("day",id);if(r.error)throw r.error}},
+   onSnapshot(cb,err){watch("cfg","config",async()=>{const r=await sb.from("config").select("data").eq("user_id",uid).maybeSingle();if(r.error){err&&err(r.error);return}cb({exists:!!r.data,data:()=>r.data&&r.data.data,metadata:{fromCache:false}})})}
+  }},
+  collection(){return{onSnapshot(cb,err){watch("days","days",async()=>{const r=await sb.from("days").select("day,orders").eq("user_id",uid);if(r.error){err&&err(r.error);return}cb({empty:!r.data.length,metadata:{fromCache:false},docs:r.data.map(x=>({id:x.day,data:()=>({orders:x.orders})}))})})}}}
+ }
+}
+renderAll();
+initDB();
+</script>
+</body>
+</html>
